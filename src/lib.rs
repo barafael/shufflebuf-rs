@@ -27,7 +27,9 @@ impl ShuffleBuf {
         if self.write_idx > self.read_idx {
             let val = self.buf[self.read_idx];
             self.read_idx += 1;
-            self.shuffle_up();
+            if self.read_idx > 4 {
+                self.shuffle_up();
+            }
             return (1 as usize, val);
         }
         (0,0)
@@ -36,9 +38,9 @@ impl ShuffleBuf {
     /// Pull some data out of the buffer
     pub fn read_many(&mut self, out_buf: &mut [u8]) -> usize {
         let mut read_count = 0;
-        if self.write_idx > 0 {
+        let avail = self.write_idx - self.read_idx;
+        if avail > 0 {
             let desired = out_buf.len();
-            let avail = self.write_idx - self.read_idx;
             if desired > avail {
                 read_count = avail;
             }
@@ -75,6 +77,7 @@ impl ShuffleBuf {
         }
     }
 
+    /// Push one byte into the buffer
     pub fn push_one(&mut self, data: u8) -> usize {
         if self.buf.len() > self.write_idx {
             self.buf[self.write_idx] = data;
