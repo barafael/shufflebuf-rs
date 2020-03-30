@@ -8,12 +8,15 @@ LICENSE: BSD3 (see LICENSE file)
 pub const BUF_LEN: usize = 256;
 
 pub struct ShuffleBuf {
+    /// The actual buffer
     buf: [u8; BUF_LEN],
+    /// The index at which the next byte should be read from the buffer
     read_idx: usize,
+    /// The index at which the next byte should be written to the buffer
     write_idx: usize,
 }
 
-
+/// Simple buffer implementation using slices
 impl ShuffleBuf {
     pub fn default() -> Self {
         Self {
@@ -23,6 +26,8 @@ impl ShuffleBuf {
         }
     }
 
+    /// Read one byte from the buffer
+    /// Returns the number of bytes returned (0 or 1)
     pub fn read_one(&mut self) -> (usize, u8) {
         if self.write_idx > self.read_idx {
             let val = self.buf[self.read_idx];
@@ -32,10 +37,11 @@ impl ShuffleBuf {
             }
             return (1 as usize, val);
         }
-        (0,0)
+        (0, 0)
     }
 
     /// Pull some data out of the buffer
+    /// Returns the number of bytes returned (`out_buf.len()` max)
     pub fn read_many(&mut self, out_buf: &mut [u8]) -> usize {
         let mut read_count = 0;
         let avail = self.write_idx - self.read_idx;
@@ -43,11 +49,11 @@ impl ShuffleBuf {
             let desired = out_buf.len();
             if desired > avail {
                 read_count = avail;
-            }
-            else {
+            } else {
                 read_count = desired;
             }
-            out_buf[..read_count].copy_from_slice(&self.buf[self.read_idx..self.read_idx+read_count]);
+            out_buf[..read_count]
+                .copy_from_slice(&self.buf[self.read_idx..self.read_idx + read_count]);
             //update pointers
             self.read_idx += read_count;
             self.shuffle_up();
@@ -60,7 +66,7 @@ impl ShuffleBuf {
         self.write_idx - self.read_idx
     }
 
-    /// how much space is vacant in the buffer?
+    /// How much space is vacant in the buffer?
     pub fn vacant(&self) -> usize {
         self.buf.len() - self.write_idx
     }
@@ -83,8 +89,7 @@ impl ShuffleBuf {
             self.buf[self.write_idx] = data;
             self.write_idx += 1;
             1
-        }
-        else {
+        } else {
             0
         }
     }
@@ -97,16 +102,15 @@ impl ShuffleBuf {
             let desired = data.len();
             if desired < vacant {
                 copy_count = desired;
-            }
-            else {
+            } else {
                 copy_count = vacant;
             }
-            self.buf[self.write_idx..self.write_idx+ copy_count].copy_from_slice(data[..copy_count].as_ref());
+            self.buf[self.write_idx..self.write_idx + copy_count]
+                .copy_from_slice(data[..copy_count].as_ref());
             self.write_idx += copy_count;
         }
         copy_count
     }
-
 }
 
 #[cfg(test)]
@@ -124,7 +128,7 @@ mod tests {
         let mut buf_b = [0u8; 25];
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 10); //same as buf_a
-        // no more bytes left
+                                    // no more bytes left
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 0);
     }
@@ -155,7 +159,7 @@ mod tests {
         shuffler.push_many(&buf_a);
         shuffler.push_many(&buf_a);
         shuffler.push_many(&buf_a);
-        assert_eq!(shuffler.available(), buf_a.len()*3);
+        assert_eq!(shuffler.available(), buf_a.len() * 3);
 
         let mut buf_b: [u8; 15] = [0; 15];
         let read_count = shuffler.read_many(buf_b.as_mut());
@@ -179,7 +183,7 @@ mod tests {
         for i in 0..100 {
             shuffler.push_one(i as u8);
         }
-        assert_eq!(shuffler.available(),100);
+        assert_eq!(shuffler.available(), 100);
         let mut read_bytes = [0u8; 50];
         shuffler.read_many(&mut read_bytes);
         assert_eq!(shuffler.vacant(), BUF_LEN - 50);

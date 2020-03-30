@@ -4,6 +4,17 @@ version = "0.1.0"
 authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
 edition = "2018"
 repository = "https://github.com/tstellanova/shufflebuf-rs"
-
+description = "Simple no_std buffering"
+license = "BSD-3-Clause"
+categories = [
+    "embedded",
+    "hardware-support",
+    "no-std",
+]
+keywords = [
+    "embedded-hal",
+    "buffer"
+]
+readme = "README.md"
 
 [dependencies]
