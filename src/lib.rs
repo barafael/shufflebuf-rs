@@ -6,14 +6,16 @@ LICENSE: BSD3 (see LICENSE file)
 #![no_std]
 
 pub const BUF_LEN: usize = 256;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::Ordering::SeqCst;
 
 pub struct ShuffleBuf {
     /// The actual buffer
     buf: [u8; BUF_LEN],
     /// The index at which the next byte should be read from the buffer
-    read_idx: usize,
+    read_idx: AtomicUsize,
     /// The index at which the next byte should be written to the buffer
-    write_idx: usize,
+    write_idx: AtomicUsize,
 }
 
 /// Simple buffer implementation using slices
@@ -21,18 +23,20 @@ impl ShuffleBuf {
     pub fn default() -> Self {
         Self {
             buf: [0; BUF_LEN],
-            read_idx: 0,
-            write_idx: 0,
+            read_idx: AtomicUsize::new(0),
+            write_idx: AtomicUsize::new(0),
         }
     }
 
     /// Read one byte from the buffer
     /// Returns the number of bytes returned (0 or 1)
     pub fn read_one(&mut self) -> (usize, u8) {
-        if self.write_idx > self.read_idx {
-            let val = self.buf[self.read_idx];
-            self.read_idx += 1;
-            if self.read_idx > 4 {
+        let read_idx = self.read_idx.load(Ordering::SeqCst);
+        let write_idx = self.write_idx.load(Ordering::SeqCst);
+        if write_idx > read_idx {
+            let val = self.buf[read_idx];
+            self.read_idx.fetch_add(1, Ordering::SeqCst);
+            if self.read_idx.load(Ordering::SeqCst) > 4 {
                 self.shuffle_up();
             }
             return (1 as usize, val);
@@ -44,7 +48,9 @@ impl ShuffleBuf {
     /// Returns the number of bytes returned (`out_buf.len()` max)
     pub fn read_many(&mut self, out_buf: &mut [u8]) -> usize {
         let mut read_count = 0;
-        let avail = self.write_idx - self.read_idx;
+        let write_idx = self.write_idx.load(Ordering::SeqCst);
+        let read_idx = self.read_idx.load(Ordering::SeqCst);
+        let avail = write_idx - read_idx;
         if avail > 0 {
             let desired = out_buf.len();
             if desired > avail {
@@ -53,9 +59,9 @@ impl ShuffleBuf {
                 read_count = desired;
             }
             out_buf[..read_count]
-                .copy_from_slice(&self.buf[self.read_idx..self.read_idx + read_count]);
+                .copy_from_slice(&self.buf[read_idx..read_idx + read_count]);
             //update pointers
-            self.read_idx += read_count;
+            self.read_idx.fetch_add(read_count, Ordering::SeqCst);
             self.shuffle_up();
         }
         read_count
@@ -63,31 +69,34 @@ impl ShuffleBuf {
 
     /// How much data is available to read?
     pub fn available(&self) -> usize {
-        self.write_idx - self.read_idx
+        self.write_idx.load(Ordering::SeqCst) - self.read_idx.load(Ordering::SeqCst)
     }
 
     /// How much space is vacant in the buffer?
     pub fn vacant(&self) -> usize {
-        self.buf.len() - self.write_idx
+        self.buf.len() - self.write_idx.load(Ordering::SeqCst)
     }
 
     /// Move remaining bytes to the start of the buffer
     fn shuffle_up(&mut self) {
-        if self.read_idx > 0 {
-            let avail = self.write_idx - self.read_idx;
+        let read_idx = self.read_idx.load(SeqCst);
+        if read_idx > 0 {
+            let write_idx = self.write_idx.load(SeqCst);
+            let avail = write_idx - read_idx;
             if avail > 0 {
-                self.buf.copy_within(self.read_idx..self.write_idx, 0);
+                self.buf.copy_within(read_idx..write_idx, 0);
+                self.read_idx.store(0, SeqCst);
+                self.write_idx.store(avail, SeqCst);
             }
-            self.read_idx = 0;
-            self.write_idx = avail;
         }
     }
 
     /// Push one byte into the buffer
     pub fn push_one(&mut self, data: u8) -> usize {
-        if self.buf.len() > self.write_idx {
-            self.buf[self.write_idx] = data;
-            self.write_idx += 1;
+        let write_idx = self.write_idx.load(SeqCst);
+        if self.buf.len() > write_idx {
+            self.buf[write_idx] = data;
+            self.write_idx.fetch_add(1, SeqCst);
             1
         } else {
             0
@@ -97,7 +106,7 @@ impl ShuffleBuf {
     /// Copy some data into the buffer
     pub fn push_many(&mut self, data: &[u8]) -> usize {
         let mut copy_count = 0;
-        let vacant = self.buf.len() - self.write_idx;
+        let vacant = self.vacant();
         if vacant > 0 {
             let desired = data.len();
             if desired < vacant {
@@ -105,9 +114,10 @@ impl ShuffleBuf {
             } else {
                 copy_count = vacant;
             }
-            self.buf[self.write_idx..self.write_idx + copy_count]
+            let write_idx = self.write_idx.load(SeqCst);
+            self.buf[write_idx..write_idx + copy_count]
                 .copy_from_slice(data[..copy_count].as_ref());
-            self.write_idx += copy_count;
+            self.write_idx.fetch_add(copy_count, SeqCst);
         }
         copy_count
     }
