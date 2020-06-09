@@ -6,7 +6,7 @@ LICENSE: BSD3 (see LICENSE file)
 #![cfg_attr(not(test), no_std)]
 
 pub const BUF_LEN: usize = 256;
-use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering::{Relaxed, SeqCst, Acquire, Release}};
 
 pub struct ShuffleBuf {
     /// The actual buffer
@@ -15,6 +15,7 @@ pub struct ShuffleBuf {
     read_idx: AtomicUsize,
     /// The index at which the next byte should be written to the buffer
     write_idx: AtomicUsize,
+    flag: AtomicBool,
 }
 
 /// Simple buffer implementation using slices
@@ -63,17 +64,20 @@ impl ShuffleBuf {
             self.read_idx.fetch_add(read_count, SeqCst);
             self.shuffle_up();
         }
+        
         read_count
     }
 
     /// How much data is available to read?
     pub fn available(&self) -> usize {
-        self.write_idx.load(SeqCst) - self.read_idx.load(SeqCst)
+        let res = self.write_idx.load(SeqCst) - self.read_idx.load(SeqCst);
+        res
     }
 
     /// How much space is vacant in the buffer?
     pub fn vacant(&self) -> usize {
-        self.buf.len() - self.write_idx.load(SeqCst)
+        let res = self.buf.len() - self.write_idx.load(SeqCst);
+        res
     }
 
     /// Move remaining bytes to the start of the buffer
@@ -88,22 +92,27 @@ impl ShuffleBuf {
                 self.write_idx.store(avail, SeqCst);
             }
         }
+        
     }
 
     /// Push one byte into the buffer
     pub fn push_one(&mut self, data: u8) -> usize {
+        
         let write_idx = self.write_idx.load(SeqCst);
         if self.buf.len() > write_idx {
             self.buf[write_idx] = data;
             self.write_idx.fetch_add(1, SeqCst);
+            
             1
         } else {
+            
             0
         }
     }
 
     /// Copy some data into the buffer
     pub fn push_many(&mut self, data: &[u8]) -> usize {
+        
         let mut copy_count = 0;
         let vacant = self.vacant();
         if vacant > 0 {
@@ -118,8 +127,11 @@ impl ShuffleBuf {
                 .copy_from_slice(data[..copy_count].as_ref());
             self.write_idx.fetch_add(copy_count, SeqCst);
         }
+        
         copy_count
     }
+
+
 }
 
 #[cfg(test)]
@@ -129,6 +141,7 @@ mod tests {
     use std::thread;
     use lazy_static::lazy_static;
     use std::sync::{Mutex};
+    use core::sync::atomic::AtomicPtr;
 
 
     #[test]
@@ -239,6 +252,47 @@ mod tests {
 
         assert_eq!(outer_thread_read_count + INNER_READ_COUNT.load(SeqCst), 100);
         assert_eq!(TOTAL_READ_COUNT.load(SeqCst), 100);
+    }
+
+    #[test]
+    fn multithread_write_read() {
+        lazy_static!{
+             static ref TOTAL_WRITE_COUNT:AtomicUsize = AtomicUsize::new(0);
+             static ref SHFFL: AtomicPtr<ShuffleBuf> = AtomicPtr::new(core::ptr::null_mut());
+             // static ref SHFFL: Mutex<ShuffleBuf> = Mutex::new(ShuffleBuf::default());
+         };
+
+        let mut shffl = ShuffleBuf::default();
+        SHFFL.store(&mut shffl, SeqCst);
+
+        let inner_thread = thread::spawn(|| {
+            for i in 0..100 {
+                //SHFFL.lock().unwrap().push_one(i as u8);
+                unsafe {
+                    SHFFL.load(SeqCst).as_mut().unwrap().push_one(i as u8);
+                }
+                TOTAL_WRITE_COUNT.fetch_add(1, SeqCst);
+                if (i % 2) == 0 { thread::yield_now(); }
+            }
+        });
+
+        let mut outer_thread_read_count = 0;
+        for _ in 0..500 {
+            let (nread, _b) = unsafe {
+                //SHFFL.lock().unwrap().read_one()
+                SHFFL.load(SeqCst).as_mut().unwrap().read_one()
+            };
+            outer_thread_read_count += nread;
+            if nread == 0  {
+                thread::yield_now();
+            }
+        }
+        inner_thread.join().unwrap();
+        println!("outer_thread_read_count: {}/100", outer_thread_read_count);
+
+
+        assert_eq!(outer_thread_read_count, TOTAL_WRITE_COUNT.load(SeqCst));
+        //assert_eq!(TOTAL_READ_COUNT.load(SeqCst), 100);
 
     }
 }
