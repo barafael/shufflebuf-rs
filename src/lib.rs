@@ -3,11 +3,10 @@ Copyright (c) 2020 Todd Stellanova
 LICENSE: BSD3 (see LICENSE file)
 */
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 pub const BUF_LEN: usize = 256;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use core::sync::atomic::Ordering::SeqCst;
+use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
 pub struct ShuffleBuf {
     /// The actual buffer
@@ -31,12 +30,12 @@ impl ShuffleBuf {
     /// Read one byte from the buffer
     /// Returns the number of bytes returned (0 or 1)
     pub fn read_one(&mut self) -> (usize, u8) {
-        let read_idx = self.read_idx.load(Ordering::SeqCst);
-        let write_idx = self.write_idx.load(Ordering::SeqCst);
+        let read_idx = self.read_idx.load(SeqCst);
+        let write_idx = self.write_idx.load(SeqCst);
         if write_idx > read_idx {
             let val = self.buf[read_idx];
-            self.read_idx.fetch_add(1, Ordering::SeqCst);
-            if self.read_idx.load(Ordering::SeqCst) > 4 {
+            self.read_idx.fetch_add(1, SeqCst);
+            if self.read_idx.load(SeqCst) > 4 {
                 self.shuffle_up();
             }
             return (1 as usize, val);
@@ -48,8 +47,8 @@ impl ShuffleBuf {
     /// Returns the number of bytes returned (`out_buf.len()` max)
     pub fn read_many(&mut self, out_buf: &mut [u8]) -> usize {
         let mut read_count = 0;
-        let write_idx = self.write_idx.load(Ordering::SeqCst);
-        let read_idx = self.read_idx.load(Ordering::SeqCst);
+        let write_idx = self.write_idx.load(SeqCst);
+        let read_idx = self.read_idx.load(SeqCst);
         let avail = write_idx - read_idx;
         if avail > 0 {
             let desired = out_buf.len();
@@ -61,7 +60,7 @@ impl ShuffleBuf {
             out_buf[..read_count]
                 .copy_from_slice(&self.buf[read_idx..read_idx + read_count]);
             //update pointers
-            self.read_idx.fetch_add(read_count, Ordering::SeqCst);
+            self.read_idx.fetch_add(read_count, SeqCst);
             self.shuffle_up();
         }
         read_count
@@ -69,12 +68,12 @@ impl ShuffleBuf {
 
     /// How much data is available to read?
     pub fn available(&self) -> usize {
-        self.write_idx.load(Ordering::SeqCst) - self.read_idx.load(Ordering::SeqCst)
+        self.write_idx.load(SeqCst) - self.read_idx.load(SeqCst)
     }
 
     /// How much space is vacant in the buffer?
     pub fn vacant(&self) -> usize {
-        self.buf.len() - self.write_idx.load(Ordering::SeqCst)
+        self.buf.len() - self.write_idx.load(SeqCst)
     }
 
     /// Move remaining bytes to the start of the buffer
@@ -126,6 +125,11 @@ impl ShuffleBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // use core::time::Duration;
+    use std::thread;
+    use lazy_static::lazy_static;
+    use std::sync::{Mutex};
+
 
     #[test]
     fn test_basics() {
@@ -198,5 +202,43 @@ mod tests {
         shuffler.read_many(&mut read_bytes);
         assert_eq!(shuffler.vacant(), BUF_LEN - 50);
         assert_eq!(read_bytes[49], 49);
+    }
+
+    #[test]
+    fn multithread_read() {
+        lazy_static!{
+            static ref TOTAL_READ_COUNT:AtomicUsize = AtomicUsize::new(0);
+            static ref INNER_READ_COUNT:AtomicUsize = AtomicUsize::new(0);
+            static ref SHUFFALO: Mutex<ShuffleBuf> = Mutex::new(ShuffleBuf::default());
+        };
+
+        for i in 0..100 {
+            SHUFFALO.lock().unwrap().push_one(i as u8);
+        }
+        assert_eq!(SHUFFALO.lock().unwrap().available(), 100);
+
+        let inner_thread = thread::spawn(|| {
+            for _ in 0..100 {
+                let (nread,_b) =  SHUFFALO.lock().unwrap().read_one();
+                TOTAL_READ_COUNT.fetch_add(nread, SeqCst);
+                INNER_READ_COUNT.fetch_add(nread, SeqCst);
+                thread::yield_now();
+            }
+        });
+
+        let mut outer_thread_read_count = 0;
+        for _ in 0..100 {
+            let (nread,_b) = SHUFFALO.lock().unwrap().read_one();
+            TOTAL_READ_COUNT.fetch_add(nread, SeqCst);
+            outer_thread_read_count += nread;
+            thread::yield_now();
+        }
+        println!("outer_thread_read_count: {}", outer_thread_read_count);
+        inner_thread.join().unwrap();
+        println!("inner_thread_read_count: {}", INNER_READ_COUNT.load(SeqCst));
+
+        assert_eq!(outer_thread_read_count + INNER_READ_COUNT.load(SeqCst), 100);
+        assert_eq!(TOTAL_READ_COUNT.load(SeqCst), 100);
+
     }
 }
