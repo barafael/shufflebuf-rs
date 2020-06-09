@@ -3,7 +3,7 @@ Copyright (c) 2020 Todd Stellanova
 LICENSE: BSD3 (see LICENSE file)
 */
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 pub const BUF_LEN: usize = 256;
 
@@ -116,6 +116,10 @@ impl ShuffleBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use lazy_static::lazy_static;
+    use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering::SeqCst};
+
 
     #[test]
     fn test_basics() {
@@ -128,7 +132,7 @@ mod tests {
         let mut buf_b = [0u8; 25];
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 10); //same as buf_a
-                                    // no more bytes left
+        // no more bytes left
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 0);
     }
@@ -188,5 +192,44 @@ mod tests {
         shuffler.read_many(&mut read_bytes);
         assert_eq!(shuffler.vacant(), BUF_LEN - 50);
         assert_eq!(read_bytes[49], 49);
+    }
+
+
+    #[test]
+    fn multithread_write_read() {
+        lazy_static!{
+            static ref TOTAL_WRITE_COUNT:AtomicUsize = AtomicUsize::new(0);
+            static ref SHFFL: AtomicPtr<ShuffleBuf> = AtomicPtr::new(core::ptr::null_mut());
+        };
+
+        let mut shffl = ShuffleBuf::default();
+        SHFFL.store(&mut shffl, SeqCst);
+
+        let inner_thread = thread::spawn(|| {
+            for i in 0..100 {
+                unsafe {
+                    SHFFL.load(SeqCst).as_mut().unwrap().push_one(i as u8);
+                }
+                TOTAL_WRITE_COUNT.fetch_add(1, SeqCst);
+                if (i % 2) == 0 { thread::yield_now(); }
+            }
+        });
+
+        let mut outer_thread_read_count = 0;
+        for _ in 0..500 {
+            let (nread, _b) = unsafe {
+                SHFFL.load(SeqCst).as_mut().unwrap().read_one()
+            };
+            outer_thread_read_count += nread;
+            if nread == 0  {
+                thread::yield_now();
+            }
+        }
+        println!("outer_thread_read_count: {}", outer_thread_read_count);
+        inner_thread.join().unwrap();
+
+        assert_eq!(outer_thread_read_count, TOTAL_WRITE_COUNT.load(SeqCst));
+        //assert_eq!(TOTAL_READ_COUNT.load(SeqCst), 100);
+
     }
 }
