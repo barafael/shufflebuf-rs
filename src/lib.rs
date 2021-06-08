@@ -258,4 +258,17 @@ mod tests {
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 0);
     }
+
+    #[test]
+    fn test_read_one() {
+        let buf_a: [u8; 10] = [7, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+        let mut shuffler = ShuffleBuf::<64>::default();
+        let push_count = shuffler.push_many(&buf_a);
+        assert_eq!(push_count, buf_a.len());
+
+        let (read_count, data) = shuffler.read_one();
+        assert_eq!(read_count, 1);
+        assert_eq!(data, 7);
+    }
 }
