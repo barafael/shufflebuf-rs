@@ -5,11 +5,9 @@ LICENSE: BSD3 (see LICENSE file)
 
 #![cfg_attr(not(test), no_std)]
 
-pub const BUF_LEN: usize = 256;
-
-pub struct ShuffleBuf {
+pub struct ShuffleBuf<const SIZE: usize> {
     /// The actual buffer
-    buf: [u8; BUF_LEN],
+    buf: [u8; SIZE],
     /// The index at which the next byte should be read from the buffer
     read_idx: usize,
     /// The index at which the next byte should be written to the buffer
@@ -17,10 +15,10 @@ pub struct ShuffleBuf {
 }
 
 /// Simple buffer implementation using slices
-impl ShuffleBuf {
+impl<const SIZE: usize> ShuffleBuf<SIZE> {
     pub fn default() -> Self {
         Self {
-            buf: [0; BUF_LEN],
+            buf: [0; SIZE],
             read_idx: 0,
             write_idx: 0,
         }
@@ -35,7 +33,7 @@ impl ShuffleBuf {
             if self.read_idx > 4 {
                 self.shuffle_up();
             }
-            return (1 as usize, val);
+            return (1_usize, val);
         }
         (0, 0)
     }
@@ -125,7 +123,7 @@ mod tests {
     fn test_basics() {
         let buf_a: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let mut shuffler = ShuffleBuf::default();
+        let mut shuffler = ShuffleBuf::<256>::default();
         let push_count = shuffler.push_many(&buf_a);
         assert_eq!(push_count, buf_a.len());
 
@@ -142,10 +140,10 @@ mod tests {
         let mut buf_a: [u8; 512] = [8; 512];
         buf_a[55] = 127;
 
-        let mut shuffler = ShuffleBuf::default();
+        let mut shuffler = ShuffleBuf::<256>::default();
         let push_count = shuffler.push_many(&buf_a);
-        assert_eq!(push_count, BUF_LEN);
-        assert_eq!(shuffler.available(), BUF_LEN);
+        assert_eq!(push_count, 256);
+        assert_eq!(shuffler.available(), 256);
         assert_eq!(shuffler.vacant(), 0);
 
         buf_a[55] = 0;
@@ -153,13 +151,13 @@ mod tests {
         assert_eq!(read_count, 60);
         assert_eq!(buf_a[55], 127); //original value
 
-        assert_eq!(shuffler.available(), BUF_LEN - 60);
+        assert_eq!(shuffler.available(), 256 - 60);
     }
 
     #[test]
     fn test_write_read_write_read() {
         let buf_a: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let mut shuffler = ShuffleBuf::default();
+        let mut shuffler = ShuffleBuf::<256>::default();
         shuffler.push_many(&buf_a);
         shuffler.push_many(&buf_a);
         shuffler.push_many(&buf_a);
@@ -182,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_single_pushes_multi_read() {
-        let mut shuffler = ShuffleBuf::default();
+        let mut shuffler = ShuffleBuf::<256>::default();
 
         for i in 0..100 {
             shuffler.push_one(i as u8);
@@ -190,19 +188,18 @@ mod tests {
         assert_eq!(shuffler.available(), 100);
         let mut read_bytes = [0u8; 50];
         shuffler.read_many(&mut read_bytes);
-        assert_eq!(shuffler.vacant(), BUF_LEN - 50);
+        assert_eq!(shuffler.vacant(), 256 - 50);
         assert_eq!(read_bytes[49], 49);
     }
-
 
     #[test]
     fn multithread_write_read() {
         lazy_static!{
             static ref TOTAL_WRITE_COUNT:AtomicUsize = AtomicUsize::new(0);
-            static ref SHFFL: AtomicPtr<ShuffleBuf> = AtomicPtr::new(core::ptr::null_mut());
+            static ref SHFFL: AtomicPtr<ShuffleBuf<256>> = AtomicPtr::new(core::ptr::null_mut());
         };
 
-        let mut shffl = ShuffleBuf::default();
+        let mut shffl = ShuffleBuf::<256>::default();
         SHFFL.store(&mut shffl, SeqCst);
 
         let inner_thread = thread::spawn(|| {
@@ -230,6 +227,35 @@ mod tests {
 
         assert_eq!(outer_thread_read_count, TOTAL_WRITE_COUNT.load(SeqCst));
         //assert_eq!(TOTAL_READ_COUNT.load(SeqCst), 100);
+    }
 
+    #[test]
+    fn test_zero_buffer() {
+        let mut shuffler = ShuffleBuf::<0>::default();
+
+        for i in 0..100 {
+            assert_eq!(0, shuffler.push_one(i as u8));
+        }
+
+        assert_eq!(shuffler.available(), 0);
+        let mut read_bytes = [0u8; 50];
+        assert_eq!(0, shuffler.read_many(&mut read_bytes));
+        assert_eq!(shuffler.vacant(), 0);
+    }
+
+    #[test]
+    fn test_basics_with_custom_length() {
+        let buf_a: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+        let mut shuffler = ShuffleBuf::<32>::default();
+        let push_count = shuffler.push_many(&buf_a);
+        assert_eq!(push_count, buf_a.len());
+
+        let mut buf_b = [0u8; 25];
+        let read_count = shuffler.read_many(&mut buf_b);
+        assert_eq!(read_count, 10); //same as buf_a
+                                    // no more bytes left
+        let read_count = shuffler.read_many(&mut buf_b);
+        assert_eq!(read_count, 0);
     }
 }

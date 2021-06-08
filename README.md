@@ -9,5 +9,5 @@ communications drivers using something like this.
 
 - [x] Works
 - [x] Tests
-- [ ] Generic over buffer length (currently fixed length buffer)
+- [x] Generic over buffer length (currently fixed length buffer)
 - [ ] Theoretically Awesome
