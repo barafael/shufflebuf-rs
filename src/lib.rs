@@ -114,10 +114,9 @@ impl<const SIZE: usize> ShuffleBuf<SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
+    use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering::SeqCst};
     use lazy_static::lazy_static;
-    use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering::SeqCst};
-
+    use std::thread;
 
     #[test]
     fn test_basics() {
@@ -130,7 +129,7 @@ mod tests {
         let mut buf_b = [0u8; 25];
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 10); //same as buf_a
-        // no more bytes left
+                                    // no more bytes left
         let read_count = shuffler.read_many(&mut buf_b);
         assert_eq!(read_count, 0);
     }
@@ -194,8 +193,8 @@ mod tests {
 
     #[test]
     fn multithread_write_read() {
-        lazy_static!{
-            static ref TOTAL_WRITE_COUNT:AtomicUsize = AtomicUsize::new(0);
+        lazy_static! {
+            static ref TOTAL_WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
             static ref SHFFL: AtomicPtr<ShuffleBuf<256>> = AtomicPtr::new(core::ptr::null_mut());
         };
 
@@ -208,17 +207,17 @@ mod tests {
                     SHFFL.load(SeqCst).as_mut().unwrap().push_one(i as u8);
                 }
                 TOTAL_WRITE_COUNT.fetch_add(1, SeqCst);
-                if (i % 2) == 0 { thread::yield_now(); }
+                if (i % 2) == 0 {
+                    thread::yield_now();
+                }
             }
         });
 
         let mut outer_thread_read_count = 0;
         for _ in 0..500 {
-            let (nread, _b) = unsafe {
-                SHFFL.load(SeqCst).as_mut().unwrap().read_one()
-            };
+            let (nread, _b) = unsafe { SHFFL.load(SeqCst).as_mut().unwrap().read_one() };
             outer_thread_read_count += nread;
-            if nread == 0  {
+            if nread == 0 {
                 thread::yield_now();
             }
         }
